@@ -1,5 +1,6 @@
  import Swisseph from "./swisseph.js";
 
+/* ========= عناصر الصفحة ========= */
 const statusEl = document.getElementById("status");
 const outEl = document.getElementById("out");
 
@@ -10,9 +11,27 @@ const planetsInHousesOutEl = document.getElementById("planetsInHousesOut");
 const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
 
-function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+function setStatus(t) {
+  if (statusEl) statusEl.textContent = t;
+}
 
-const SIGNS_AR = ["الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء","الميزان","العقرب","القوس","الجدي","الدلو","الحوت"];
+/* ========= تطبيع الأرقام العربية/الفارسية + إزالة علامات RTL الخفية ========= */
+function normalizeDigits(s) {
+  if (s == null) return s;
+  const map = {
+    "٠":"0","١":"1","٢":"2","٣":"3","٤":"4","٥":"5","٦":"6","٧":"7","٨":"8","٩":"9",
+    "۰":"0","۱":"1","۲":"2","۳":"3","۴":"4","۵":"5","۶":"6","۷":"7","۸":"8","۹":"9"
+  };
+  return String(s)
+    .replace(/[٠-٩۰-۹]/g, ch => map[ch] ?? ch)
+    .replace(/[\u200E\u200F\u202A-\u202E]/g, ""); // علامات اتجاه خفية
+}
+
+/* ========= الأبراج بالعربي ========= */
+const SIGNS_AR = [
+  "الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء",
+  "الميزان","العقرب","القوس","الجدي","الدلو","الحوت"
+];
 
 function toZodiac(lon) {
   lon = ((lon % 360) + 360) % 360;
@@ -22,48 +41,69 @@ function toZodiac(lon) {
   const min = Math.floor((d - deg) * 60);
   return { sign: SIGNS_AR[s], deg, min };
 }
+
 function fmtDegMin(lonDeg) {
   const z = toZodiac(lonDeg);
   return `${String(z.deg).padStart(2, "0")}° ${String(z.min).padStart(2, "0")}'`;
 }
 
+/* ========= تحديد البيت (1..12) بناء على cusps ========= */
 function houseOf(lon, cusps) {
   const c = [];
   for (let i = 1; i <= 12; i++) c.push(((cusps[i] % 360) + 360) % 360);
   const L = ((lon % 360) + 360) % 360;
+
   for (let i = 0; i < 12; i++) {
-    const a = c[i], b = c[(i + 1) % 12];
-    if (a <= b) { if (L >= a && L < b) return i + 1; }
-    else { if (L >= a || L < b) return i + 1; }
+    const a = c[i];
+    const b = c[(i + 1) % 12];
+
+    if (a <= b) {
+      if (L >= a && L < b) return i + 1;
+    } else {
+      // التفاف عبر 360
+      if (L >= a || L < b) return i + 1;
+    }
   }
   return 12;
 }
 
 let swe;
 
-/* ===== التاريخ/الوقت UTC ===== */
+/* ========= قراءة التاريخ/الوقت UTC (مصَحّحة للأرقام العربية) ========= */
 function parseUTC() {
-  const d = document.getElementById("date")?.value;
-  const t = document.getElementById("time")?.value || "12:00";
-  if (!d) throw new Error("اختر التاريخ");
-  const [Y, M, D] = d.split("-").map(Number);
-  const [h, m] = t.split(":").map(Number);
+  const dRaw = document.getElementById("date")?.value;
+  const tRaw = document.getElementById("time")?.value || "12:00";
+  if (!dRaw) throw new Error("اختر التاريخ");
+
+  const d = normalizeDigits(dRaw);
+  const t = normalizeDigits(tRaw);
+
+  const [Y, M, D] = d.split("-").map(v => Number(normalizeDigits(v)));
+  const [h, m] = t.split(":").map(v => Number(normalizeDigits(v)));
+
+  if (![Y, M, D, h, m].every(Number.isFinite)) {
+    throw new Error(`مدخلات غير صالحة: التاريخ=${dRaw} الوقت=${tRaw}`);
+  }
+
   return { Y, M, D, hour: h + m / 60 };
 }
 
-/* ===== Julian day ===== */
+/* ========= Julian Day (UT) ========= */
 function juldayUTC(Y, M, D, hour) {
+  if (typeof swe._swe_julday !== "function") {
+    throw new Error("دالة swe._swe_julday غير موجودة في swisseph.js");
+  }
   return swe._swe_julday(Y, M, D, hour, swe.SE_GREG_CAL);
 }
 
-/* ===== calc_ut (قراءة lon + speedLon) ===== */
+/* ========= calc_ut: lon + speedLon ========= */
 function calcPlanetUT(jd, pid, flags) {
   const xxPtr = swe._malloc(6 * 8);
   const serrPtr = swe._malloc(256);
 
   try {
     const retflag = swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
-    const errMsg = (swe.UTF8ToString?.(serrPtr) || "").trim();
+    const errMsg = (typeof swe.UTF8ToString === "function" ? swe.UTF8ToString(serrPtr) : "").trim();
 
     const base = xxPtr >> 3; // /8
     const lon = swe.HEAPF64[base + 0];
@@ -77,7 +117,7 @@ function calcPlanetUT(jd, pid, flags) {
   }
 }
 
-/* ===== البيوت (Placidus) ===== */
+/* ========= houses (Placidus) ========= */
 function calcHouses(jd, lat, lon, hsys = "P") {
   if (typeof swe._swe_houses !== "function") return null;
 
@@ -104,7 +144,7 @@ function calcHouses(jd, lat, lon, hsys = "P") {
   }
 }
 
-/* ===== قائمة الكواكب ===== */
+/* ========= قائمة الكواكب ========= */
 function planetsList() {
   return [
     ["الشمس",   swe.SE_SUN],
@@ -120,19 +160,17 @@ function planetsList() {
   ];
 }
 
-/* ===== init ===== */
+/* ========= init: تحميل + ضبط مسار ephemeris داخل /sweph ========= */
 async function init() {
   setStatus("تحميل Swiss Ephemeris...");
   swe = await Swisseph({ locateFile: f => f });
 
-  // ✅ هنا الإصلاح: ضبط مسار الإيفيميريدز باستخدام ccall (بدون HEAPU8)
-  // الملفات داخل /sweph/ في هذه الحزمة :contentReference[oaicite:1]{index=1}
+  // ضبط مسار الإيفيميريدز: ملفات الحزمة مفكوكة داخل /sweph/
   if (typeof swe.ccall === "function") {
     swe.ccall("swe_set_ephe_path", "void", ["string"], ["/sweph"]);
-  } else if (typeof swe._swe_set_ephe_path === "function") {
-    // fallback نادر (إن لم تكن ccall موجودة)
-    const ptr = swe._malloc(16);
-    swe.stringToUTF8("/sweph", ptr, 16);
+  } else if (typeof swe._swe_set_ephe_path === "function" && typeof swe.stringToUTF8 === "function") {
+    const ptr = swe._malloc(32);
+    swe.stringToUTF8("/sweph", ptr, 32);
     swe._swe_set_ephe_path(ptr);
     swe._free(ptr);
   }
@@ -140,8 +178,10 @@ async function init() {
   setStatus("جاهز ✅");
 }
 
-/* ===== الحساب الرئيسي ===== */
+/* ========= الحساب الرئيسي ========= */
 async function calc() {
+  if (!swe) throw new Error("المحرك لم يجهز بعد");
+
   outEl && (outEl.innerHTML = "");
   housesOutEl && (housesOutEl.innerHTML = "");
   planetsInHousesOutEl && (planetsInHousesOutEl.innerHTML = "");
@@ -150,13 +190,14 @@ async function calc() {
   const { Y, M, D, hour } = parseUTC();
   const jd = juldayUTC(Y, M, D, hour);
 
-  // أضف SPEED لتحديد الرجوع بدقة
+  // إضافة SPEED مهمة لتحديد الرجوع بدقة
   const flags = swe.SEFLG_SWIEPH | swe.SEFLG_SPEED;
 
   const planetResults = [];
 
   for (const [name, pid] of planetsList()) {
     const { lon, speedLon } = calcPlanetUT(jd, pid, flags);
+
     const retro = speedLon < 0 ? "نعم" : "لا";
     const z = toZodiac(lon);
 
@@ -175,13 +216,13 @@ async function calc() {
     }
   }
 
-  // البيوت
+  // البيوت (إذا lat/lon موجودة)
   if (latEl && lonEl && (housesOutEl || anglesOutEl || planetsInHousesOutEl)) {
-    const lat = Number(latEl.value);
-    const lon = Number(lonEl.value);
+    const lat = Number(normalizeDigits(latEl.value));
+    const lon = Number(normalizeDigits(lonEl.value));
 
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const houseRes = calcHouses(jd, lat, lon, "P");
+      const houseRes = calcHouses(jd, lat, lon, "P"); // Placidus
       if (houseRes && housesOutEl) {
         const { cusps, ascmc } = houseRes;
 
@@ -220,9 +261,11 @@ async function calc() {
   setStatus(`تم الحساب ✅ (JD=${jd.toFixed(6)} UTC)`);
 }
 
+/* ========= زر الحساب ========= */
 document.getElementById("btn")?.addEventListener("click", () => {
   calc().catch(e => setStatus("خطأ: " + e.message));
 });
 
+/* ========= تشغيل ========= */
 init().catch(e => setStatus("خطأ init: " + e.message));
 
