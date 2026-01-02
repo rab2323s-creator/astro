@@ -1,6 +1,6 @@
  import Swisseph from "./swisseph.js";
 
-/* ========= عناصر الصفحة (قد لا تكون كلها موجودة حسب index.html) ========= */
+/* ========= عناصر الصفحة ========= */
 const statusEl = document.getElementById("status");
 const outEl = document.getElementById("out");
 
@@ -35,7 +35,7 @@ function fmtDegMin(lonDeg) {
   return `${String(z.deg).padStart(2, "0")}° ${String(z.min).padStart(2, "0")}'`;
 }
 
-/* ========= تحديد البيت (1..12) بناء على cusps ========= */
+/* ========= تحديد البيت (1..12) ========= */
 function houseOf(lon, cusps) {
   const c = [];
   for (let i = 1; i <= 12; i++) c.push(((cusps[i] % 360) + 360) % 360);
@@ -44,11 +44,9 @@ function houseOf(lon, cusps) {
   for (let i = 0; i < 12; i++) {
     const a = c[i];
     const b = c[(i + 1) % 12];
-
     if (a <= b) {
       if (L >= a && L < b) return i + 1;
     } else {
-      // التفاف عبر 360
       if (L >= a || L < b) return i + 1;
     }
   }
@@ -60,11 +58,11 @@ let swe;
 
 async function init() {
   setStatus("تحميل Swiss Ephemeris...");
-  swe = await Swisseph({ locateFile: (f) => f }); // مهم لربط wasm و data
+  swe = await Swisseph({ locateFile: f => f });
   setStatus("جاهز ✅");
 }
 
-/* ========= قراءة التاريخ/الوقت ========= */
+/* ========= قراءة التاريخ/الوقت (UTC) ========= */
 function parseUTC() {
   const d = document.getElementById("date")?.value;
   const t = document.getElementById("time")?.value || "12:00";
@@ -75,49 +73,68 @@ function parseUTC() {
   return { Y, M, D, hour: h + m / 60 };
 }
 
-/* ========= حساب البيوت (محاولة ذكية حسب ما توفره نسخة swisseph) =========
-   - بعض النسخ توفر swe.houses(jd, lat, lon, 'P')
-   - وبعضها توفر دالة منخفضة level مثل swe._houses(...)
-   هذا الكود يحاول ويعطي نتيجة إذا أمكن.
-*/
-function tryCalcHouses(jd, lat, lon, hsys = "P") {
-  // 1) إن كانت هناك دالة houses عالية المستوى
-  if (typeof swe.houses === "function") {
-    // نتوقع شيء مثل: { cusps: [...], ascmc: [...] } أو [cusps, ascmc]
-    const r = swe.houses(jd, lat, lon, hsys);
-    if (Array.isArray(r) && r.length >= 2) {
-      return { cusps: r[0], ascmc: r[1] };
-    }
-    if (r && r.cusps && r.ascmc) {
-      return { cusps: r.cusps, ascmc: r.ascmc };
-    }
+/* ========= Helpers: Julian Day / Calc_ut / Houses ========= */
+function juldayUTC(Y, M, D, hour) {
+  // في هذه النسخة الدالة اسمها _swe_julday
+  if (typeof swe._swe_julday !== "function") {
+    throw new Error("دالة swe._swe_julday غير موجودة في swisseph.js");
+  }
+  return swe._swe_julday(Y, M, D, hour, swe.SE_GREG_CAL);
+}
+
+function calcPlanetUT(jd, pid, flags) {
+  // swe_calc_ut(jd, ipl, iflag, xx, serr)
+  if (typeof swe._swe_calc_ut !== "function") {
+    throw new Error("دالة swe._swe_calc_ut غير موجودة في swisseph.js");
   }
 
-  // 2) محاولة دالة منخفضة المستوى _houses (لو موجودة)
-  if (typeof swe._houses === "function") {
-    // في Swiss Ephemeris C: swe_houses(jd_ut, geolat, geolon, hsys, cusps, ascmc)
-    // نستخدم Float64Array(13) للـ cusps (1..12) + [0] مهمل
-    // و Float64Array(10) للـ ascmc
+  const xxPtr = swe._malloc(6 * 8);
+  const serrPtr = swe._malloc(256);
+
+  try {
+    swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
+
+    // قراءة 6 قيم double من HEAPF64
+    const base = xxPtr >> 3; // /8
+    const lon = swe.HEAPF64[base + 0];
+    const speedLon = swe.HEAPF64[base + 3];
+
+    return { lon, speedLon };
+  } finally {
+    swe._free(xxPtr);
+    swe._free(serrPtr);
+  }
+}
+
+function calcHouses(jd, lat, lon, hsys = "P") {
+  // swe_houses(jd_ut, geolat, geolon, hsys, cusps, ascmc)
+  if (typeof swe._swe_houses !== "function") return null;
+
+  const cuspsPtr = swe._malloc(13 * 8);  // 0..12 (نستخدم 1..12)
+  const ascmcPtr = swe._malloc(10 * 8);  // عادة 0..9
+  const hsysCode = hsys.charCodeAt(0);
+
+  try {
+    swe._swe_houses(jd, lat, lon, hsysCode, cuspsPtr, ascmcPtr);
+
     const cusps = new Float64Array(13);
     const ascmc = new Float64Array(10);
 
-    // بعض لفافات emscripten تتوقع hsys كـ char code
-    // سنحاول تمرير كود الحرف:
-    const hsysCode = hsys.charCodeAt(0);
+    let b = cuspsPtr >> 3;
+    for (let i = 0; i < 13; i++) cusps[i] = swe.HEAPF64[b + i];
 
-    try {
-      swe._houses(jd, lat, lon, hsysCode, cusps, ascmc);
-      return { cusps, ascmc };
-    } catch (e) {
-      // تجاهل
-    }
+    b = ascmcPtr >> 3;
+    for (let i = 0; i < 10; i++) ascmc[i] = swe.HEAPF64[b + i];
+
+    return { cusps, ascmc };
+  } finally {
+    swe._free(cuspsPtr);
+    swe._free(ascmcPtr);
   }
-
-  return null;
 }
 
-/* ========= الكواكب الأساسية ========= */
-function getPlanetsList() {
+/* ========= قائمة الكواكب ========= */
+function planetsList() {
   return [
     ["الشمس",   swe.SE_SUN],
     ["القمر",   swe.SE_MOON],
@@ -132,105 +149,87 @@ function getPlanetsList() {
   ];
 }
 
-/* ========= حساب الكواكب + (اختياري) البيوت ========= */
+/* ========= الحساب الرئيسي ========= */
 async function calc() {
   if (!swe) throw new Error("المحرك لم يجهز بعد");
 
-  if (outEl) outEl.innerHTML = "";
-  if (housesOutEl) housesOutEl.innerHTML = "";
-  if (planetsInHousesOutEl) planetsInHousesOutEl.innerHTML = "";
-  if (anglesOutEl) anglesOutEl.textContent = "";
+  outEl && (outEl.innerHTML = "");
+  housesOutEl && (housesOutEl.innerHTML = "");
+  planetsInHousesOutEl && (planetsInHousesOutEl.innerHTML = "");
+  anglesOutEl && (anglesOutEl.textContent = "");
 
   const { Y, M, D, hour } = parseUTC();
-  const jd = swe._julday(Y, M, D, hour, swe.SE_GREG_CAL);
+  const jd = juldayUTC(Y, M, D, hour);
 
   const flags = swe.SEFLG_SWIEPH;
 
-  // نحسب البيوت إذا كانت عناصرها موجودة + lat/lon موجودة
-  let houses = null;
-  let lat = null;
-  let lon = null;
-
-  if (latEl && lonEl && (housesOutEl || planetsInHousesOutEl || anglesOutEl)) {
-    lat = Number(latEl.value);
-    lon = Number(lonEl.value);
-
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      houses = tryCalcHouses(jd, lat, lon, "P"); // Placidus
-    }
-  }
-
-  // لتجميع نتائج الكواكب لاستخدامها لاحقاً في Planets in Houses
+  // 1) حساب الكواكب
   const planetResults = [];
 
-  for (const [name, pid] of getPlanetsList()) {
-    const xx = new Float64Array(6);
-    swe._calc_ut(jd, pid, flags, xx, 0);
+  for (const [name, pid] of planetsList()) {
+    const { lon, speedLon } = calcPlanetUT(jd, pid, flags);
 
-    const lonP = xx[0];
-    const speedLon = xx[3];
     const retro = speedLon < 0 ? "نعم" : "لا";
-    const z = toZodiac(lonP);
+    const z = toZodiac(lon);
 
-    planetResults.push({ name, lon: lonP });
+    planetResults.push({ name, lon });
 
     if (outEl) {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${name}</td>
-        <td>${lonP.toFixed(6)}</td>
+        <td>${lon.toFixed(6)}</td>
         <td>${z.sign}</td>
-        <td>${fmtDegMin(lonP)}</td>
+        <td>${fmtDegMin(lon)}</td>
         <td>${retro}</td>
       `;
       outEl.appendChild(tr);
     }
   }
 
-  // عرض البيوت إن توفرت
-  if (houses && housesOutEl) {
-    const { cusps, ascmc } = houses;
+  // 2) حساب البيوت (اختياري) إذا عناصرها موجودة
+  if (latEl && lonEl && (housesOutEl || anglesOutEl || planetsInHousesOutEl)) {
+    const lat = Number(latEl.value);
+    const lon = Number(lonEl.value);
 
-    for (let i = 1; i <= 12; i++) {
-      const c = cusps[i];
-      const z = toZodiac(c);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      const houseRes = calcHouses(jd, lat, lon, "P"); // Placidus
+      if (houseRes && housesOutEl) {
+        const { cusps, ascmc } = houseRes;
 
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>البيت ${i}</td>
-        <td>${c.toFixed(6)}</td>
-        <td>${z.sign}</td>
-        <td>${fmtDegMin(c)}</td>
-      `;
-      housesOutEl.appendChild(tr);
-    }
+        for (let i = 1; i <= 12; i++) {
+          const c = cusps[i];
+          const z = toZodiac(c);
 
-    // ASC/MC غالباً في ascmc[0] و ascmc[1] حسب SwissEph
-    if (anglesOutEl && ascmc) {
-      const asc = ascmc[0];
-      const mc  = ascmc[1];
-      const ascZ = toZodiac(asc);
-      const mcZ  = toZodiac(mc);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>البيت ${i}</td>
+            <td>${c.toFixed(6)}</td>
+            <td>${z.sign}</td>
+            <td>${fmtDegMin(c)}</td>
+          `;
+          housesOutEl.appendChild(tr);
+        }
 
-      anglesOutEl.textContent =
-        `الطالع (ASC): ${ascZ.sign} ${fmtDegMin(asc)}  |  وسط السماء (MC): ${mcZ.sign} ${fmtDegMin(mc)}`;
-    }
+        // ASC/MC
+        if (anglesOutEl) {
+          const asc = ascmc[0];
+          const mc = ascmc[1];
+          const ascZ = toZodiac(asc);
+          const mcZ = toZodiac(mc);
+          anglesOutEl.textContent =
+            `الطالع (ASC): ${ascZ.sign} ${fmtDegMin(asc)}  |  وسط السماء (MC): ${mcZ.sign} ${fmtDegMin(mc)}`;
+        }
 
-    // الكواكب في البيوت
-    if (planetsInHousesOutEl) {
-      for (const p of planetResults) {
-        const h = houseOf(p.lon, cusps);
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${p.name}</td><td>البيت ${h}</td>`;
-        planetsInHousesOutEl.appendChild(tr);
-      }
-    }
-  } else {
-    // لو المستخدم عنده واجهة البيوت لكن الدالة غير متاحة
-    if ((housesOutEl || planetsInHousesOutEl || anglesOutEl) && (latEl && lonEl)) {
-      if (anglesOutEl) {
-        anglesOutEl.textContent =
-          "ملاحظة: نسخة swisseph الحالية لا تُظهر دالة البيوت (houses) بشكل مباشر. الكواكب تعمل ✅ وسنضيف البيوت بتعديل بسيط على طريقة الاستدعاء.";
+        // الكواكب في البيوت
+        if (planetsInHousesOutEl) {
+          for (const p of planetResults) {
+            const h = houseOf(p.lon, cusps);
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${p.name}</td><td>البيت ${h}</td>`;
+            planetsInHousesOutEl.appendChild(tr);
+          }
+        }
       }
     }
   }
@@ -238,11 +237,11 @@ async function calc() {
   setStatus(`تم الحساب ✅ (JD=${jd.toFixed(6)} UTC)`);
 }
 
-/* ========= ربط الزر ========= */
+/* ========= زر الحساب ========= */
 document.getElementById("btn")?.addEventListener("click", () => {
-  calc().catch((e) => setStatus("خطأ: " + e.message));
+  calc().catch(e => setStatus("خطأ: " + e.message));
 });
 
-/* ========= تشغيل ========= */
-init().catch((e) => setStatus("خطأ init: " + e.message));
+/* ========= بدء التشغيل ========= */
+init().catch(e => setStatus("خطأ init: " + e.message));
 
