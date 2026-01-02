@@ -9,3 +9,5 @@ table { width:100%; border-collapse: collapse; margin-top: 8px; }
 th, td { border-bottom:1px solid #eee; padding: 10px; text-align: right; }
 .note { font-size: 13px; opacity: .8; margin-top: 10px; }
 .status { margin-top: 8px; font-size: 13px; opacity: .9; }
+.grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+
