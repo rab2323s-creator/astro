@@ -24,7 +24,8 @@ function normalizeDigits(s) {
   };
   return String(s)
     .replace(/[٠-٩۰-۹]/g, ch => map[ch] ?? ch)
-    .replace(/[\u200E\u200F\u202A-\u202E]/g, ""); // علامات اتجاه خفية
+    .replace(/[\u200E\u200F\u202A-\u202E]/g, "") // علامات اتجاه خفية
+    .trim();
 }
 
 /* ========= الأبراج بالعربي ========= */
@@ -47,7 +48,7 @@ function fmtDegMin(lonDeg) {
   return `${String(z.deg).padStart(2, "0")}° ${String(z.min).padStart(2, "0")}'`;
 }
 
-/* ========= تحديد البيت (1..12) بناء على cusps ========= */
+/* ========= تحديد البيت (1..12) ========= */
 function houseOf(lon, cusps) {
   const c = [];
   for (let i = 1; i <= 12; i++) c.push(((cusps[i] % 360) + 360) % 360);
@@ -60,7 +61,6 @@ function houseOf(lon, cusps) {
     if (a <= b) {
       if (L >= a && L < b) return i + 1;
     } else {
-      // التفاف عبر 360
       if (L >= a || L < b) return i + 1;
     }
   }
@@ -69,20 +69,58 @@ function houseOf(lon, cusps) {
 
 let swe;
 
-/* ========= قراءة التاريخ/الوقت UTC (مصَحّحة للأرقام العربية) ========= */
+/* ========= قراءة تاريخ مرنة: ISO (YYYY-MM-DD) أو محلي (DD/MM/YYYY) ========= */
+function parseDateFlexible(dateValue) {
+  const s = normalizeDigits(dateValue);
+
+  // ISO: 2026-03-10
+  if (s.includes("-")) {
+    const parts = s.split("-").map(p => Number(p));
+    if (parts.length === 3 && parts[0] >= 100 && parts[0] <= 9999) {
+      return { Y: parts[0], M: parts[1], D: parts[2] };
+    }
+  }
+
+  // محلي: 10/03/2026 أو ٠٤‏/٠٥‏/١٠٠٠
+  if (s.includes("/")) {
+    const parts = s.split("/").map(p => Number(p));
+    if (parts.length === 3) {
+      // غالبًا السنة هي الجزء الأخير
+      const Y = parts[2];
+      const A = parts[0];
+      const B = parts[1];
+
+      // نفترض DD/MM/YYYY (الأكثر شيوعًا بالعربية)
+      let D = A, M = B;
+
+      // لو واضح أنها MM/DD (نادر) نعدّل:
+      // إذا A > 12 و B <= 12 => هذا DD/MM صحيح
+      // إذا A <= 12 و B > 12 => هذا MM/DD
+      if (A <= 12 && B > 12) { M = A; D = B; }
+
+      return { Y, M, D };
+    }
+  }
+
+  throw new Error(`صيغة تاريخ غير مدعومة: ${dateValue}`);
+}
+
+/* ========= قراءة التاريخ/الوقت UTC (نهائي) ========= */
 function parseUTC() {
   const dRaw = document.getElementById("date")?.value;
   const tRaw = document.getElementById("time")?.value || "12:00";
   if (!dRaw) throw new Error("اختر التاريخ");
 
-  const d = normalizeDigits(dRaw);
-  const t = normalizeDigits(tRaw);
+  const { Y, M, D } = parseDateFlexible(dRaw);
 
-  const [Y, M, D] = d.split("-").map(v => Number(normalizeDigits(v)));
-  const [h, m] = t.split(":").map(v => Number(normalizeDigits(v)));
+  const t = normalizeDigits(tRaw);
+  const [h, m] = t.split(":").map(v => Number(v));
 
   if (![Y, M, D, h, m].every(Number.isFinite)) {
     throw new Error(`مدخلات غير صالحة: التاريخ=${dRaw} الوقت=${tRaw}`);
+  }
+  if (M < 1 || M > 12 || D < 1 || D > 31 || h < 0 || h > 23 || m < 0 || m > 59) {
+    throw new Error(`قيم خارج النطاق: ${Y}-${M}-${D} ${h}:${m}`);
   }
 
   return { Y, M, D, hour: h + m / 60 };
@@ -90,9 +128,6 @@ function parseUTC() {
 
 /* ========= Julian Day (UT) ========= */
 function juldayUTC(Y, M, D, hour) {
-  if (typeof swe._swe_julday !== "function") {
-    throw new Error("دالة swe._swe_julday غير موجودة في swisseph.js");
-  }
   return swe._swe_julday(Y, M, D, hour, swe.SE_GREG_CAL);
 }
 
@@ -160,19 +195,14 @@ function planetsList() {
   ];
 }
 
-/* ========= init: تحميل + ضبط مسار ephemeris داخل /sweph ========= */
+/* ========= init: تحميل + ضبط ephe path ========= */
 async function init() {
   setStatus("تحميل Swiss Ephemeris...");
   swe = await Swisseph({ locateFile: f => f });
 
-  // ضبط مسار الإيفيميريدز: ملفات الحزمة مفكوكة داخل /sweph/
+  // ضبط مسار الإيفيميريدز داخل /sweph
   if (typeof swe.ccall === "function") {
     swe.ccall("swe_set_ephe_path", "void", ["string"], ["/sweph"]);
-  } else if (typeof swe._swe_set_ephe_path === "function" && typeof swe.stringToUTF8 === "function") {
-    const ptr = swe._malloc(32);
-    swe.stringToUTF8("/sweph", ptr, 32);
-    swe._swe_set_ephe_path(ptr);
-    swe._free(ptr);
   }
 
   setStatus("جاهز ✅");
@@ -190,7 +220,6 @@ async function calc() {
   const { Y, M, D, hour } = parseUTC();
   const jd = juldayUTC(Y, M, D, hour);
 
-  // إضافة SPEED مهمة لتحديد الرجوع بدقة
   const flags = swe.SEFLG_SWIEPH | swe.SEFLG_SPEED;
 
   const planetResults = [];
@@ -216,13 +245,13 @@ async function calc() {
     }
   }
 
-  // البيوت (إذا lat/lon موجودة)
+  // البيوت (اختياري)
   if (latEl && lonEl && (housesOutEl || anglesOutEl || planetsInHousesOutEl)) {
     const lat = Number(normalizeDigits(latEl.value));
     const lon = Number(normalizeDigits(lonEl.value));
 
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const houseRes = calcHouses(jd, lat, lon, "P"); // Placidus
+      const houseRes = calcHouses(jd, lat, lon, "P");
       if (houseRes && housesOutEl) {
         const { cusps, ascmc } = houseRes;
 
