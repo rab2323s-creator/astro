@@ -22,6 +22,37 @@ function toZodiac(lon) {
     min: Math.floor((d - Math.floor(d)) * 60)
   };
 }
+function fmtDegMin(lonDeg) {
+  const z = toZodiac(lonDeg);
+  return {
+    sign: z.sign,
+    text: `${String(z.deg).padStart(2,"0")}° ${String(z.min).padStart(2,"0")}'`
+  };
+}
+
+// ترجع رقم البيت (1..12) الذي يقع فيه الكوكب
+function houseOf(lon, cusps) {
+  // cusps[1..12] طول بداية كل بيت (0..360)
+  // نحولها لمصفوفة 12 ونقفل الدائرة
+  const c = [];
+  for (let i = 1; i <= 12; i++) c.push(((cusps[i] % 360) + 360) % 360);
+
+  // للتعامل مع الالتفاف عند 360
+  const L = ((lon % 360) + 360) % 360;
+
+  for (let i = 0; i < 12; i++) {
+    const a = c[i];
+    const b = c[(i + 1) % 12];
+
+    if (a <= b) {
+      if (L >= a && L < b) return i + 1;
+    } else {
+      // الالتفاف عبر 360
+      if (L >= a || L < b) return i + 1;
+    }
+  }
+  return 12;
+}
 
 let swe;
 
