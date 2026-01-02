@@ -15,7 +15,28 @@ function setStatus(t) {
   if (statusEl) statusEl.textContent = t;
 }
 
-/* ========= تطبيع الأرقام العربية/الفارسية + إزالة علامات RTL الخفية ========= */
+/* ========= ثوابت Swiss Ephemeris (أرقام صحيحة) =========
+   مهم: لا نعتمد على swe.SE_* لأن نسختك لا تصدرها.
+*/
+const SE_GREG_CAL = 1;
+
+// Planets (Swiss Ephemeris)
+const SE_SUN = 0;
+const SE_MOON = 1;
+const SE_MERCURY = 2;
+const SE_VENUS = 3;
+const SE_MARS = 4;
+const SE_JUPITER = 5;
+const SE_SATURN = 6;
+const SE_URANUS = 7;
+const SE_NEPTUNE = 8;
+const SE_PLUTO = 9;
+
+// Flags
+const SEFLG_SWIEPH = 2;
+const SEFLG_SPEED = 256;
+
+/* ========= تطبيع الأرقام العربية/الفارسية + إزالة علامات RTL ========= */
 function normalizeDigits(s) {
   if (s == null) return s;
   const map = {
@@ -24,7 +45,7 @@ function normalizeDigits(s) {
   };
   return String(s)
     .replace(/[٠-٩۰-۹]/g, ch => map[ch] ?? ch)
-    .replace(/[\u200E\u200F\u202A-\u202E]/g, "") // علامات اتجاه خفية
+    .replace(/[\u200E\u200F\u202A-\u202E]/g, "")
     .trim();
 }
 
@@ -69,35 +90,26 @@ function houseOf(lon, cusps) {
 
 let swe;
 
-/* ========= قراءة تاريخ مرنة: ISO (YYYY-MM-DD) أو محلي (DD/MM/YYYY) ========= */
+/* ========= قراءة تاريخ مرنة: ISO أو DD/MM/YYYY ========= */
 function parseDateFlexible(dateValue) {
   const s = normalizeDigits(dateValue);
 
-  // ISO: 2026-03-10
+  // ISO: YYYY-MM-DD
   if (s.includes("-")) {
-    const parts = s.split("-").map(p => Number(p));
-    if (parts.length === 3 && parts[0] >= 100 && parts[0] <= 9999) {
-      return { Y: parts[0], M: parts[1], D: parts[2] };
-    }
+    const [Y, M, D] = s.split("-").map(Number);
+    return { Y, M, D };
   }
 
-  // محلي: 10/03/2026 أو ٠٤‏/٠٥‏/١٠٠٠
+  // محلي: DD/MM/YYYY (مع الأرقام العربية)
   if (s.includes("/")) {
-    const parts = s.split("/").map(p => Number(p));
+    const parts = s.split("/").map(Number);
     if (parts.length === 3) {
-      // غالبًا السنة هي الجزء الأخير
       const Y = parts[2];
-      const A = parts[0];
-      const B = parts[1];
+      let D = parts[0];
+      let M = parts[1];
 
-      // نفترض DD/MM/YYYY (الأكثر شيوعًا بالعربية)
-      let D = A, M = B;
-
-      // لو واضح أنها MM/DD (نادر) نعدّل:
-      // إذا A > 12 و B <= 12 => هذا DD/MM صحيح
-      // إذا A <= 12 و B > 12 => هذا MM/DD
-      if (A <= 12 && B > 12) { M = A; D = B; }
-
+      // لو كانت MM/DD (نادر) نعدّل
+      if (parts[0] <= 12 && parts[1] > 12) { M = parts[0]; D = parts[1]; }
       return { Y, M, D };
     }
   }
@@ -105,7 +117,6 @@ function parseDateFlexible(dateValue) {
   throw new Error(`صيغة تاريخ غير مدعومة: ${dateValue}`);
 }
 
-/* ========= قراءة التاريخ/الوقت UTC (نهائي) ========= */
 function parseUTC() {
   const dRaw = document.getElementById("date")?.value;
   const tRaw = document.getElementById("time")?.value || "12:00";
@@ -114,13 +125,10 @@ function parseUTC() {
   const { Y, M, D } = parseDateFlexible(dRaw);
 
   const t = normalizeDigits(tRaw);
-  const [h, m] = t.split(":").map(v => Number(v));
+  const [h, m] = t.split(":").map(Number);
 
   if (![Y, M, D, h, m].every(Number.isFinite)) {
     throw new Error(`مدخلات غير صالحة: التاريخ=${dRaw} الوقت=${tRaw}`);
-  }
-  if (M < 1 || M > 12 || D < 1 || D > 31 || h < 0 || h > 23 || m < 0 || m > 59) {
-    throw new Error(`قيم خارج النطاق: ${Y}-${M}-${D} ${h}:${m}`);
   }
 
   return { Y, M, D, hour: h + m / 60 };
@@ -128,7 +136,7 @@ function parseUTC() {
 
 /* ========= Julian Day (UT) ========= */
 function juldayUTC(Y, M, D, hour) {
-  return swe._swe_julday(Y, M, D, hour, swe.SE_GREG_CAL);
+  return swe._swe_julday(Y, M, D, hour, SE_GREG_CAL); // ✅ Gregorian
 }
 
 /* ========= calc_ut: lon + speedLon ========= */
@@ -140,7 +148,7 @@ function calcPlanetUT(jd, pid, flags) {
     const retflag = swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
     const errMsg = (typeof swe.UTF8ToString === "function" ? swe.UTF8ToString(serrPtr) : "").trim();
 
-    const base = xxPtr >> 3; // /8
+    const base = xxPtr >> 3;
     const lon = swe.HEAPF64[base + 0];
     const speedLon = swe.HEAPF64[base + 3];
 
@@ -152,7 +160,7 @@ function calcPlanetUT(jd, pid, flags) {
   }
 }
 
-/* ========= houses (Placidus) ========= */
+/* ========= Houses (Placidus) ========= */
 function calcHouses(jd, lat, lon, hsys = "P") {
   if (typeof swe._swe_houses !== "function") return null;
 
@@ -182,25 +190,25 @@ function calcHouses(jd, lat, lon, hsys = "P") {
 /* ========= قائمة الكواكب ========= */
 function planetsList() {
   return [
-    ["الشمس",   swe.SE_SUN],
-    ["القمر",   swe.SE_MOON],
-    ["عطارد",   swe.SE_MERCURY],
-    ["الزهرة",  swe.SE_VENUS],
-    ["المريخ",  swe.SE_MARS],
-    ["المشتري", swe.SE_JUPITER],
-    ["زحل",     swe.SE_SATURN],
-    ["أورانوس", swe.SE_URANUS],
-    ["نبتون",   swe.SE_NEPTUNE],
-    ["بلوتو",   swe.SE_PLUTO],
+    ["الشمس",   SE_SUN],
+    ["القمر",   SE_MOON],
+    ["عطارد",   SE_MERCURY],
+    ["الزهرة",  SE_VENUS],
+    ["المريخ",  SE_MARS],
+    ["المشتري", SE_JUPITER],
+    ["زحل",     SE_SATURN],
+    ["أورانوس", SE_URANUS],
+    ["نبتون",   SE_NEPTUNE],
+    ["بلوتو",   SE_PLUTO],
   ];
 }
 
-/* ========= init: تحميل + ضبط ephe path ========= */
+/* ========= init: تحميل + ephe path ========= */
 async function init() {
   setStatus("تحميل Swiss Ephemeris...");
   swe = await Swisseph({ locateFile: f => f });
 
-  // ضبط مسار الإيفيميريدز داخل /sweph
+  // اجعل المحرك يقرأ ملفات ephemeris من /sweph (حزمة data تفكها هناك)
   if (typeof swe.ccall === "function") {
     swe.ccall("swe_set_ephe_path", "void", ["string"], ["/sweph"]);
   }
@@ -208,7 +216,7 @@ async function init() {
   setStatus("جاهز ✅");
 }
 
-/* ========= الحساب الرئيسي ========= */
+/* ========= الحساب ========= */
 async function calc() {
   if (!swe) throw new Error("المحرك لم يجهز بعد");
 
@@ -220,7 +228,7 @@ async function calc() {
   const { Y, M, D, hour } = parseUTC();
   const jd = juldayUTC(Y, M, D, hour);
 
-  const flags = swe.SEFLG_SWIEPH | swe.SEFLG_SPEED;
+  const flags = SEFLG_SWIEPH | SEFLG_SPEED;
 
   const planetResults = [];
 
@@ -229,7 +237,6 @@ async function calc() {
 
     const retro = speedLon < 0 ? "نعم" : "لا";
     const z = toZodiac(lon);
-
     planetResults.push({ name, lon });
 
     if (outEl) {
@@ -290,11 +297,9 @@ async function calc() {
   setStatus(`تم الحساب ✅ (JD=${jd.toFixed(6)} UTC)`);
 }
 
-/* ========= زر الحساب ========= */
 document.getElementById("btn")?.addEventListener("click", () => {
   calc().catch(e => setStatus("خطأ: " + e.message));
 });
 
-/* ========= تشغيل ========= */
 init().catch(e => setStatus("خطأ init: " + e.message));
 
