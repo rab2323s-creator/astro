@@ -11,30 +11,72 @@
   <main class="wrap">
     <h1>حاسبة فلكية دقيقة جدًا (Swiss Ephemeris WASM)</h1>
 
-    <!-- إدخال التاريخ والوقت -->
     <section class="card">
+      <h2>المكان</h2>
+
       <div class="grid">
         <label>
-          التاريخ (UTC)
+          الدولة
+          <select id="country"></select>
+        </label>
+
+        <label>
+          المدينة
+          <select id="city"></select>
+        </label>
+
+        <label>
+          بحث المدينة (اختياري)
+          <input id="citySearch" type="text" placeholder="اكتب اسم المدينة بالعربي أو بالإنجليزي…" />
+        </label>
+      </div>
+
+      <div class="grid2">
+        <label>
+          خط العرض (Latitude)
+          <input id="lat" type="number" step="0.0001" readonly />
+        </label>
+        <label>
+          خط الطول (Longitude)
+          <input id="lon" type="number" step="0.0001" readonly />
+        </label>
+      </div>
+
+      <div class="grid2">
+        <label>
+          المنطقة الزمنية (Timezone)
+          <input id="tz" type="text" readonly />
+        </label>
+        <label>
+          ملاحظة
+          <input id="tzNote" type="text" readonly value="يتم تحويل الوقت المحلي تلقائيًا إلى UTC مع DST" />
+        </label>
+      </div>
+
+      <div class="note" id="citiesStatus">تحميل المدن…</div>
+    </section>
+
+    <section class="card">
+      <h2>الوقت</h2>
+
+      <div class="grid">
+        <label>
+          التاريخ (محلي)
           <input id="date" type="date" />
         </label>
 
         <label>
-          الوقت (UTC)
+          الوقت (محلي)
           <input id="time" type="time" step="60" value="12:00" />
         </label>
 
         <button id="btn">احسب</button>
       </div>
 
-      <p class="note">
-        * حاليًا الحساب بالـ UTC. لاحقًا نضيف الوقت المحلي + المنطقة الزمنية وDST تلقائيًا.
-      </p>
-
+      <div class="note" id="utcPreview">UTC: —</div>
       <div id="status" class="status">جاهز.</div>
     </section>
 
-    <!-- النتائج: مواقع الكواكب -->
     <section class="card">
       <h2>مواقع الكواكب</h2>
       <table>
@@ -51,23 +93,8 @@
       </table>
     </section>
 
-    <!-- البيوت + ASC/MC -->
     <section class="card">
       <h2>البيوت (Placidus)</h2>
-
-      <div class="grid2">
-        <label>
-          خط العرض (Latitude)
-          <input id="lat" type="number" step="0.0001" value="52.5200" />
-        </label>
-
-        <label>
-          خط الطول (Longitude)
-          <input id="lon" type="number" step="0.0001" value="13.4050" />
-        </label>
-      </div>
-
-      <p class="note">* مثال افتراضي: برلين. غيّرها لموقعك (شرق + / غرب -).</p>
 
       <table>
         <thead>
@@ -84,7 +111,6 @@
       <div class="note" id="anglesOut"></div>
     </section>
 
-    <!-- الكواكب في البيوت -->
     <section class="card">
       <h2>الكواكب في البيوت</h2>
       <table>
@@ -97,7 +123,11 @@
         <tbody id="planetsInHousesOut"></tbody>
       </table>
     </section>
+
   </main>
+
+  <!-- Luxon for timezone + DST -->
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 
   <script type="module" src="app.js"></script>
 </body>
