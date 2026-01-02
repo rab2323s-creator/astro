@@ -3,40 +3,27 @@
 /* ========= عناصر الصفحة ========= */
 const statusEl = document.getElementById("status");
 const outEl = document.getElementById("out");
-
 const housesOutEl = document.getElementById("housesOut");
 const anglesOutEl = document.getElementById("anglesOut");
 const planetsInHousesOutEl = document.getElementById("planetsInHousesOut");
 
+const countryEl = document.getElementById("country");
+const cityEl = document.getElementById("city");
+const citySearchEl = document.getElementById("citySearch");
+const citiesStatusEl = document.getElementById("citiesStatus");
+
 const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
+const tzEl = document.getElementById("tz");
 
-function setStatus(t) {
-  if (statusEl) statusEl.textContent = t;
-}
+const dateEl = document.getElementById("date");
+const timeEl = document.getElementById("time");
+const utcPreviewEl = document.getElementById("utcPreview");
 
-/* ========= ثوابت Swiss Ephemeris (أرقام صحيحة) =========
-   مهم: لا نعتمد على swe.SE_* لأن نسختك لا تصدرها.
-*/
-const SE_GREG_CAL = 1;
+function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+function setCitiesStatus(t) { if (citiesStatusEl) citiesStatusEl.textContent = t; }
 
-// Planets (Swiss Ephemeris)
-const SE_SUN = 0;
-const SE_MOON = 1;
-const SE_MERCURY = 2;
-const SE_VENUS = 3;
-const SE_MARS = 4;
-const SE_JUPITER = 5;
-const SE_SATURN = 6;
-const SE_URANUS = 7;
-const SE_NEPTUNE = 8;
-const SE_PLUTO = 9;
-
-// Flags
-const SEFLG_SWIEPH = 2;
-const SEFLG_SPEED = 256;
-
-/* ========= تطبيع الأرقام العربية/الفارسية + إزالة علامات RTL ========= */
+/* ========= تطبيع أرقام عربية/فارسية + إزالة علامات RTL ========= */
 function normalizeDigits(s) {
   if (s == null) return s;
   const map = {
@@ -49,12 +36,8 @@ function normalizeDigits(s) {
     .trim();
 }
 
-/* ========= الأبراج بالعربي ========= */
-const SIGNS_AR = [
-  "الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء",
-  "الميزان","العقرب","القوس","الجدي","الدلو","الحوت"
-];
-
+/* ========= الأبراج ========= */
+const SIGNS_AR = ["الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء","الميزان","العقرب","القوس","الجدي","الدلو","الحوت"];
 function toZodiac(lon) {
   lon = ((lon % 360) + 360) % 360;
   const s = Math.floor(lon / 30);
@@ -63,7 +46,6 @@ function toZodiac(lon) {
   const min = Math.floor((d - deg) * 60);
   return { sign: SIGNS_AR[s], deg, min };
 }
-
 function fmtDegMin(lonDeg) {
   const z = toZodiac(lonDeg);
   return `${String(z.deg).padStart(2, "0")}° ${String(z.min).padStart(2, "0")}'`;
@@ -76,83 +58,167 @@ function houseOf(lon, cusps) {
   const L = ((lon % 360) + 360) % 360;
 
   for (let i = 0; i < 12; i++) {
-    const a = c[i];
-    const b = c[(i + 1) % 12];
-
-    if (a <= b) {
-      if (L >= a && L < b) return i + 1;
-    } else {
-      if (L >= a || L < b) return i + 1;
-    }
+    const a = c[i], b = c[(i + 1) % 12];
+    if (a <= b) { if (L >= a && L < b) return i + 1; }
+    else { if (L >= a || L < b) return i + 1; }
   }
   return 12;
 }
 
+/* ========= SwissEph (نفس الكود الذي أعطاك مواقع صحيحة) ========= */
 let swe;
 
-/* ========= قراءة تاريخ مرنة: ISO أو DD/MM/YYYY ========= */
-function parseDateFlexible(dateValue) {
-  const s = normalizeDigits(dateValue);
+/* ثوابت (في نسختك تعمل بهذه الأرقام) */
+const SE_GREG_CAL = 1;
+const SEFLG_SWIEPH = 2;
+const SEFLG_SPEED = 256;
 
-  // ISO: YYYY-MM-DD
-  if (s.includes("-")) {
-    const [Y, M, D] = s.split("-").map(Number);
-    return { Y, M, D };
-  }
+// Planets IDs
+const SE_SUN = 0, SE_MOON = 1, SE_MERCURY = 2, SE_VENUS = 3, SE_MARS = 4,
+      SE_JUPITER = 5, SE_SATURN = 6, SE_URANUS = 7, SE_NEPTUNE = 8, SE_PLUTO = 9;
 
-  // محلي: DD/MM/YYYY (مع الأرقام العربية)
-  if (s.includes("/")) {
-    const parts = s.split("/").map(Number);
-    if (parts.length === 3) {
-      const Y = parts[2];
-      let D = parts[0];
-      let M = parts[1];
-
-      // لو كانت MM/DD (نادر) نعدّل
-      if (parts[0] <= 12 && parts[1] > 12) { M = parts[0]; D = parts[1]; }
-      return { Y, M, D };
-    }
-  }
-
-  throw new Error(`صيغة تاريخ غير مدعومة: ${dateValue}`);
+function planetsList() {
+  return [
+    ["الشمس",   SE_SUN],
+    ["القمر",   SE_MOON],
+    ["عطارد",   SE_MERCURY],
+    ["الزهرة",  SE_VENUS],
+    ["المريخ",  SE_MARS],
+    ["المشتري", SE_JUPITER],
+    ["زحل",     SE_SATURN],
+    ["أورانوس", SE_URANUS],
+    ["نبتون",   SE_NEPTUNE],
+    ["بلوتو",   SE_PLUTO],
+  ];
 }
 
-function parseUTC() {
-  const dRaw = document.getElementById("date")?.value;
-  const tRaw = document.getElementById("time")?.value || "12:00";
+/* ========= Cities ========= */
+let CITIES = [];
+const countriesMap = new Map(); // key: country code/name -> {country, country_ar, cities: []}
+
+function cityLabel(c) {
+  // عرض عربي إن وجد، وإلا إنجليزي
+  const cityName = c.city_ar || c.city;
+  const countryName = c.country_ar || c.country;
+  return `${cityName} — ${countryName}`;
+}
+
+function rebuildCountrySelect() {
+  countryEl.innerHTML = "";
+  const entries = Array.from(countriesMap.values())
+    .sort((a, b) => (a.country_ar || a.country).localeCompare(b.country_ar || b.country, "ar"));
+
+  for (const c of entries) {
+    const opt = document.createElement("option");
+    opt.value = c.country;
+    opt.textContent = c.country_ar || c.country;
+    countryEl.appendChild(opt);
+  }
+}
+
+function rebuildCitySelect(countryKey, searchTerm = "") {
+  const entry = countriesMap.get(countryKey);
+  cityEl.innerHTML = "";
+  if (!entry) return;
+
+  const q = normalizeDigits(searchTerm).toLowerCase();
+  const list = q
+    ? entry.cities.filter(x => (x.city_ar || "").toLowerCase().includes(q) || (x.city || "").toLowerCase().includes(q))
+    : entry.cities;
+
+  // حد للعرض حتى لا تتعب الصفحة مع ملف ضخم
+  const MAX = 500;
+  const sliced = list.slice(0, MAX);
+
+  for (const c of sliced) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.city_ar || c.city;
+    cityEl.appendChild(opt);
+  }
+
+  if (list.length > MAX) {
+    setCitiesStatus(`تمت التصفية: ${list.length} مدينة (عرضنا أول ${MAX}). استخدم البحث لتضييق النتائج.`);
+  } else {
+    setCitiesStatus(`مدن: ${list.length}`);
+  }
+
+  // اختر أول مدينة وتحديث القيم
+  if (cityEl.options.length) {
+    cityEl.selectedIndex = 0;
+    applySelectedCity();
+  }
+}
+
+function applySelectedCity() {
+  const countryKey = countryEl.value;
+  const entry = countriesMap.get(countryKey);
+  if (!entry) return;
+
+  const id = cityEl.value;
+  const c = entry.cities.find(x => String(x.id) === String(id));
+  if (!c) return;
+
+  latEl.value = c.lat;
+  lonEl.value = c.lon;
+  tzEl.value = c.tz || "";
+
+  updateUtcPreview();
+}
+
+/* ========= تحويل محلي -> UTC باستخدام Luxon + tz ========= */
+function getUtcComponentsFromLocal() {
+  const dRaw = dateEl.value;
+  const tRaw = timeEl.value || "12:00";
+  const tz = tzEl.value;
+
   if (!dRaw) throw new Error("اختر التاريخ");
+  if (!tz) throw new Error("اختر مدينة (Timezone غير متوفر)");
 
-  const { Y, M, D } = parseDateFlexible(dRaw);
+  const d = normalizeDigits(dRaw);     // متوقع ISO YYYY-MM-DD من input
+  const t = normalizeDigits(tRaw);     // HH:mm
 
-  const t = normalizeDigits(tRaw);
-  const [h, m] = t.split(":").map(Number);
+  const isoLocal = `${d}T${t}:00`;
 
-  if (![Y, M, D, h, m].every(Number.isFinite)) {
-    throw new Error(`مدخلات غير صالحة: التاريخ=${dRaw} الوقت=${tRaw}`);
+  const { DateTime } = window.luxon || {};
+  if (!DateTime) throw new Error("Luxon لم يتم تحميله");
+
+  const local = DateTime.fromISO(isoLocal, { zone: tz });
+  if (!local.isValid) throw new Error("وقت/تاريخ غير صالح");
+
+  const utc = local.toUTC();
+
+  const Y = utc.year;
+  const M = utc.month;
+  const D = utc.day;
+  const hour = utc.hour + utc.minute / 60 + utc.second / 3600;
+
+  return { utc, Y, M, D, hour };
+}
+
+function updateUtcPreview() {
+  try {
+    const { utc } = getUtcComponentsFromLocal();
+    utcPreviewEl.textContent = `UTC: ${utc.toFormat("yyyy-LL-dd HH:mm")} (تحويل تلقائي مع DST)`;
+  } catch {
+    utcPreviewEl.textContent = "UTC: —";
   }
-
-  return { Y, M, D, hour: h + m / 60 };
 }
 
-/* ========= Julian Day (UT) ========= */
+/* ========= Swiss calc (كواكب + بيوت) ========= */
 function juldayUTC(Y, M, D, hour) {
-  return swe._swe_julday(Y, M, D, hour, SE_GREG_CAL); // ✅ Gregorian
+  return swe._swe_julday(Y, M, D, hour, SE_GREG_CAL);
 }
 
-/* ========= calc_ut: lon + speedLon ========= */
 function calcPlanetUT(jd, pid, flags) {
   const xxPtr = swe._malloc(6 * 8);
   const serrPtr = swe._malloc(256);
-
   try {
     const retflag = swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
-    const errMsg = (typeof swe.UTF8ToString === "function" ? swe.UTF8ToString(serrPtr) : "").trim();
-
     const base = xxPtr >> 3;
     const lon = swe.HEAPF64[base + 0];
     const speedLon = swe.HEAPF64[base + 3];
-
-    if (retflag < 0) throw new Error(errMsg || "خطأ في swe_calc_ut");
+    if (retflag < 0) throw new Error("خطأ في حساب الكوكب");
     return { lon, speedLon };
   } finally {
     swe._free(xxPtr);
@@ -160,7 +226,6 @@ function calcPlanetUT(jd, pid, flags) {
   }
 }
 
-/* ========= Houses (Placidus) ========= */
 function calcHouses(jd, lat, lon, hsys = "P") {
   if (typeof swe._swe_houses !== "function") return null;
 
@@ -187,119 +252,151 @@ function calcHouses(jd, lat, lon, hsys = "P") {
   }
 }
 
-/* ========= قائمة الكواكب ========= */
-function planetsList() {
-  return [
-    ["الشمس",   SE_SUN],
-    ["القمر",   SE_MOON],
-    ["عطارد",   SE_MERCURY],
-    ["الزهرة",  SE_VENUS],
-    ["المريخ",  SE_MARS],
-    ["المشتري", SE_JUPITER],
-    ["زحل",     SE_SATURN],
-    ["أورانوس", SE_URANUS],
-    ["نبتون",   SE_NEPTUNE],
-    ["بلوتو",   SE_PLUTO],
-  ];
-}
-
-/* ========= init: تحميل + ephe path ========= */
+/* ========= init ========= */
 async function init() {
   setStatus("تحميل Swiss Ephemeris...");
   swe = await Swisseph({ locateFile: f => f });
 
-  // اجعل المحرك يقرأ ملفات ephemeris من /sweph (حزمة data تفكها هناك)
+  // اجعل المحرك يقرأ ملفات ephemeris من /sweph
   if (typeof swe.ccall === "function") {
     swe.ccall("swe_set_ephe_path", "void", ["string"], ["/sweph"]);
   }
 
+  setStatus("تحميل المدن…");
+  await loadCities();
+
+  // افتراضي تاريخ اليوم
+  const now = new Date();
+  dateEl.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+  updateUtcPreview();
+
   setStatus("جاهز ✅");
+}
+
+/* ========= تحميل المدن ========= */
+async function loadCities() {
+  const res = await fetch("./data/cities.min.json", { cache: "no-cache" });
+  if (!res.ok) throw new Error("لم أستطع تحميل data/cities.min.json");
+  CITIES = await res.json();
+
+  // بناء map للدول
+  countriesMap.clear();
+  for (const c of CITIES) {
+    const key = c.country; // مفتاح الدولة
+    if (!countriesMap.has(key)) {
+      countriesMap.set(key, { country: c.country, country_ar: c.country_ar || "", cities: [] });
+    }
+    countriesMap.get(key).cities.push(c);
+  }
+
+  // ترتيب المدن داخل كل دولة
+  for (const entry of countriesMap.values()) {
+    entry.cities.sort((a, b) => (a.city_ar || a.city).localeCompare(b.city_ar || b.city, "ar"));
+  }
+
+  rebuildCountrySelect();
+
+  // اختَر أول دولة ثم مدنها
+  if (countryEl.options.length) {
+    countryEl.selectedIndex = 0;
+    rebuildCitySelect(countryEl.value);
+  }
+
+  setCitiesStatus(`تم تحميل ${CITIES.length} مدينة (نموذج). يمكنك استبدال الملف بقاعدة عالمية بنفس البنية.`);
 }
 
 /* ========= الحساب ========= */
 async function calc() {
-  if (!swe) throw new Error("المحرك لم يجهز بعد");
+  outEl.innerHTML = "";
+  housesOutEl.innerHTML = "";
+  planetsInHousesOutEl.innerHTML = "";
+  anglesOutEl.textContent = "";
 
-  outEl && (outEl.innerHTML = "");
-  housesOutEl && (housesOutEl.innerHTML = "");
-  planetsInHousesOutEl && (planetsInHousesOutEl.innerHTML = "");
-  anglesOutEl && (anglesOutEl.textContent = "");
+  const lat = Number(latEl.value);
+  const lon = Number(lonEl.value);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error("الموقع غير صالح");
 
-  const { Y, M, D, hour } = parseUTC();
+  // محلي -> UTC
+  const { utc, Y, M, D, hour } = getUtcComponentsFromLocal();
+
+  // JD على UTC
   const jd = juldayUTC(Y, M, D, hour);
 
   const flags = SEFLG_SWIEPH | SEFLG_SPEED;
 
   const planetResults = [];
-
   for (const [name, pid] of planetsList()) {
-    const { lon, speedLon } = calcPlanetUT(jd, pid, flags);
-
+    const { lon: plon, speedLon } = calcPlanetUT(jd, pid, flags);
     const retro = speedLon < 0 ? "نعم" : "لا";
-    const z = toZodiac(lon);
-    planetResults.push({ name, lon });
+    const z = toZodiac(plon);
+    planetResults.push({ name, lon: plon });
 
-    if (outEl) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${name}</td>
-        <td>${lon.toFixed(6)}</td>
-        <td>${z.sign}</td>
-        <td>${fmtDegMin(lon)}</td>
-        <td>${retro}</td>
-      `;
-      outEl.appendChild(tr);
-    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${name}</td>
+      <td>${plon.toFixed(6)}</td>
+      <td>${z.sign}</td>
+      <td>${fmtDegMin(plon)}</td>
+      <td>${retro}</td>
+    `;
+    outEl.appendChild(tr);
   }
 
-  // البيوت (اختياري)
-  if (latEl && lonEl && (housesOutEl || anglesOutEl || planetsInHousesOutEl)) {
-    const lat = Number(normalizeDigits(latEl.value));
-    const lon = Number(normalizeDigits(lonEl.value));
+  // البيوت (Placidus)
+  const houseRes = calcHouses(jd, lat, lon, "P");
+  if (houseRes) {
+    const { cusps, ascmc } = houseRes;
 
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const houseRes = calcHouses(jd, lat, lon, "P");
-      if (houseRes && housesOutEl) {
-        const { cusps, ascmc } = houseRes;
+    for (let i = 1; i <= 12; i++) {
+      const c = cusps[i];
+      const z = toZodiac(c);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>البيت ${i}</td>
+        <td>${c.toFixed(6)}</td>
+        <td>${z.sign}</td>
+        <td>${fmtDegMin(c)}</td>
+      `;
+      housesOutEl.appendChild(tr);
+    }
 
-        for (let i = 1; i <= 12; i++) {
-          const c = cusps[i];
-          const z = toZodiac(c);
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>البيت ${i}</td>
-            <td>${c.toFixed(6)}</td>
-            <td>${z.sign}</td>
-            <td>${fmtDegMin(c)}</td>
-          `;
-          housesOutEl.appendChild(tr);
-        }
-
-        if (anglesOutEl) {
-          const asc = ascmc[0];
-          const mc = ascmc[1];
-          anglesOutEl.textContent =
-            `الطالع (ASC): ${toZodiac(asc).sign} ${fmtDegMin(asc)} | وسط السماء (MC): ${toZodiac(mc).sign} ${fmtDegMin(mc)}`;
-        }
-
-        if (planetsInHousesOutEl) {
-          for (const p of planetResults) {
-            const h = houseOf(p.lon, cusps);
-            const tr = document.createElement("tr");
-            tr.innerHTML = `<td>${p.name}</td><td>البيت ${h}</td>`;
-            planetsInHousesOutEl.appendChild(tr);
-          }
-        }
-      }
+    const asc = ascmc[0];
+    const mc = ascmc[1];
+    anglesOutEl.textContent =
+      `الطالع (ASC): ${toZodiac(asc).sign} ${fmtDegMin(asc)} | وسط السماء (MC): ${toZodiac(mc).sign} ${fmtDegMin(mc)} | UTC المحسوب: ${utc.toFormat("yyyy-LL-dd HH:mm")}`;
+    
+    for (const p of planetResults) {
+      const h = houseOf(p.lon, cusps);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${p.name}</td><td>البيت ${h}</td>`;
+      planetsInHousesOutEl.appendChild(tr);
     }
   }
 
   setStatus(`تم الحساب ✅ (JD=${jd.toFixed(6)} UTC)`);
 }
 
-document.getElementById("btn")?.addEventListener("click", () => {
+/* ========= أحداث واجهة المدن ========= */
+countryEl.addEventListener("change", () => {
+  citySearchEl.value = "";
+  rebuildCitySelect(countryEl.value);
+});
+
+cityEl.addEventListener("change", () => {
+  applySelectedCity();
+});
+
+citySearchEl.addEventListener("input", () => {
+  rebuildCitySelect(countryEl.value, citySearchEl.value);
+});
+
+dateEl.addEventListener("change", updateUtcPreview);
+timeEl.addEventListener("change", updateUtcPreview);
+
+document.getElementById("btn").addEventListener("click", () => {
   calc().catch(e => setStatus("خطأ: " + e.message));
 });
 
+/* ========= تشغيل ========= */
 init().catch(e => setStatus("خطأ init: " + e.message));
 
