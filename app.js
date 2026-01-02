@@ -1,6 +1,5 @@
  import Swisseph from "./swisseph.js";
 
-/* ========= عناصر الصفحة ========= */
 const statusEl = document.getElementById("status");
 const outEl = document.getElementById("out");
 
@@ -11,15 +10,9 @@ const planetsInHousesOutEl = document.getElementById("planetsInHousesOut");
 const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
 
-function setStatus(t) {
-  if (statusEl) statusEl.textContent = t;
-}
+function setStatus(t) { if (statusEl) statusEl.textContent = t; }
 
-/* ========= الأبراج بالعربي ========= */
-const SIGNS_AR = [
-  "الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء",
-  "الميزان","العقرب","القوس","الجدي","الدلو","الحوت"
-];
+const SIGNS_AR = ["الحمل","الثور","الجوزاء","السرطان","الأسد","العذراء","الميزان","العقرب","القوس","الجدي","الدلو","الحوت"];
 
 function toZodiac(lon) {
   lon = ((lon % 360) + 360) % 360;
@@ -29,89 +22,86 @@ function toZodiac(lon) {
   const min = Math.floor((d - deg) * 60);
   return { sign: SIGNS_AR[s], deg, min };
 }
-
 function fmtDegMin(lonDeg) {
   const z = toZodiac(lonDeg);
   return `${String(z.deg).padStart(2, "0")}° ${String(z.min).padStart(2, "0")}'`;
 }
-
-/* ========= تحديد البيت (1..12) ========= */
 function houseOf(lon, cusps) {
   const c = [];
   for (let i = 1; i <= 12; i++) c.push(((cusps[i] % 360) + 360) % 360);
   const L = ((lon % 360) + 360) % 360;
-
   for (let i = 0; i < 12; i++) {
-    const a = c[i];
-    const b = c[(i + 1) % 12];
-    if (a <= b) {
-      if (L >= a && L < b) return i + 1;
-    } else {
-      if (L >= a || L < b) return i + 1;
-    }
+    const a = c[i], b = c[(i + 1) % 12];
+    if (a <= b) { if (L >= a && L < b) return i + 1; }
+    else { if (L >= a || L < b) return i + 1; }
   }
   return 12;
 }
 
-/* ========= تهيئة Swiss Ephemeris ========= */
 let swe;
 
-async function init() {
-  setStatus("تحميل Swiss Ephemeris...");
-  swe = await Swisseph({ locateFile: f => f });
-  setStatus("جاهز ✅");
-}
+/* ===== ضبط مسار ملفات الإيفيميريدز داخل FS (/sweph) ===== */
+function setEphePath(path = "/sweph") {
+  if (typeof swe._swe_set_ephe_path !== "function") return;
 
-/* ========= قراءة التاريخ/الوقت (UTC) ========= */
-function parseUTC() {
-  const d = document.getElementById("date")?.value;
-  const t = document.getElementById("time")?.value || "12:00";
-  if (!d) throw new Error("اختر التاريخ");
-
-  const [Y, M, D] = d.split("-").map(Number);
-  const [h, m] = t.split(":").map(Number);
-  return { Y, M, D, hour: h + m / 60 };
-}
-
-/* ========= Helpers: Julian Day / Calc_ut / Houses ========= */
-function juldayUTC(Y, M, D, hour) {
-  // في هذه النسخة الدالة اسمها _swe_julday
-  if (typeof swe._swe_julday !== "function") {
-    throw new Error("دالة swe._swe_julday غير موجودة في swisseph.js");
+  const bytes = new TextEncoder().encode(path + "\0");
+  const ptr = swe._malloc(bytes.length);
+  try {
+    swe.HEAPU8.set(bytes, ptr);
+    swe._swe_set_ephe_path(ptr);
+  } finally {
+    swe._free(ptr);
   }
+}
+
+/* ===== Julian Day ===== */
+function juldayUTC(Y, M, D, hour) {
   return swe._swe_julday(Y, M, D, hour, swe.SE_GREG_CAL);
 }
 
-function calcPlanetUT(jd, pid, flags) {
-  // swe_calc_ut(jd, ipl, iflag, xx, serr)
-  if (typeof swe._swe_calc_ut !== "function") {
-    throw new Error("دالة swe._swe_calc_ut غير موجودة في swisseph.js");
+/* ===== قراءة serr (نص) ===== */
+function readSerr(serrPtr) {
+  // serr عبارة عن C string داخل HEAPU8
+  let s = "";
+  for (let i = 0; i < 255; i++) {
+    const ch = swe.HEAPU8[serrPtr + i];
+    if (ch === 0) break;
+    s += String.fromCharCode(ch);
   }
+  return s.trim();
+}
 
+/* ===== calc_ut مع تحقق من الخطأ ===== */
+function calcPlanetUT(jd, pid, flags) {
   const xxPtr = swe._malloc(6 * 8);
   const serrPtr = swe._malloc(256);
 
   try {
-    swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
+    // retflag قد يكون < 0 عند الخطأ
+    const retflag = swe._swe_calc_ut(jd, pid, flags, xxPtr, serrPtr);
+    const errMsg = readSerr(serrPtr);
 
-    // قراءة 6 قيم double من HEAPF64
     const base = xxPtr >> 3; // /8
     const lon = swe.HEAPF64[base + 0];
     const speedLon = swe.HEAPF64[base + 3];
 
-    return { lon, speedLon };
+    if (retflag < 0) {
+      throw new Error(errMsg || "خطأ في حساب الكوكب (swe_calc_ut)");
+    }
+
+    return { lon, speedLon, errMsg };
   } finally {
     swe._free(xxPtr);
     swe._free(serrPtr);
   }
 }
 
+/* ===== Houses (Placidus) ===== */
 function calcHouses(jd, lat, lon, hsys = "P") {
-  // swe_houses(jd_ut, geolat, geolon, hsys, cusps, ascmc)
   if (typeof swe._swe_houses !== "function") return null;
 
-  const cuspsPtr = swe._malloc(13 * 8);  // 0..12 (نستخدم 1..12)
-  const ascmcPtr = swe._malloc(10 * 8);  // عادة 0..9
+  const cuspsPtr = swe._malloc(13 * 8);
+  const ascmcPtr = swe._malloc(10 * 8);
   const hsysCode = hsys.charCodeAt(0);
 
   try {
@@ -133,7 +123,17 @@ function calcHouses(jd, lat, lon, hsys = "P") {
   }
 }
 
-/* ========= قائمة الكواكب ========= */
+/* ===== إدخال التاريخ/الوقت ===== */
+function parseUTC() {
+  const d = document.getElementById("date")?.value;
+  const t = document.getElementById("time")?.value || "12:00";
+  if (!d) throw new Error("اختر التاريخ");
+  const [Y, M, D] = d.split("-").map(Number);
+  const [h, m] = t.split(":").map(Number);
+  return { Y, M, D, hour: h + m / 60 };
+}
+
+/* ===== قائمة الكواكب ===== */
 function planetsList() {
   return [
     ["الشمس",   swe.SE_SUN],
@@ -149,10 +149,20 @@ function planetsList() {
   ];
 }
 
-/* ========= الحساب الرئيسي ========= */
-async function calc() {
-  if (!swe) throw new Error("المحرك لم يجهز بعد");
+/* ===== init ===== */
+async function init() {
+  setStatus("تحميل Swiss Ephemeris...");
+  swe = await Swisseph({ locateFile: f => f });
 
+  // أهم خطوة لتصحيح النتائج:
+  // ملفات الإيفيميريدز موجودة داخل /sweph/ في هذه الحزمة 
+  setEphePath("/sweph");
+
+  setStatus("جاهز ✅");
+}
+
+/* ===== الحساب الرئيسي ===== */
+async function calc() {
   outEl && (outEl.innerHTML = "");
   housesOutEl && (housesOutEl.innerHTML = "");
   planetsInHousesOutEl && (planetsInHousesOutEl.innerHTML = "");
@@ -161,9 +171,9 @@ async function calc() {
   const { Y, M, D, hour } = parseUTC();
   const jd = juldayUTC(Y, M, D, hour);
 
-  const flags = swe.SEFLG_SWIEPH;
+  // أضف SEFLG_SPEED حتى تكون السرعة/الرجوع صحيحة
+  const flags = swe.SEFLG_SWIEPH | swe.SEFLG_SPEED;
 
-  // 1) حساب الكواكب
   const planetResults = [];
 
   for (const [name, pid] of planetsList()) {
@@ -187,20 +197,19 @@ async function calc() {
     }
   }
 
-  // 2) حساب البيوت (اختياري) إذا عناصرها موجودة
+  // البيوت (اختياري)
   if (latEl && lonEl && (housesOutEl || anglesOutEl || planetsInHousesOutEl)) {
     const lat = Number(latEl.value);
     const lon = Number(lonEl.value);
 
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const houseRes = calcHouses(jd, lat, lon, "P"); // Placidus
+      const houseRes = calcHouses(jd, lat, lon, "P");
       if (houseRes && housesOutEl) {
         const { cusps, ascmc } = houseRes;
 
         for (let i = 1; i <= 12; i++) {
           const c = cusps[i];
           const z = toZodiac(c);
-
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>البيت ${i}</td>
@@ -211,7 +220,6 @@ async function calc() {
           housesOutEl.appendChild(tr);
         }
 
-        // ASC/MC
         if (anglesOutEl) {
           const asc = ascmc[0];
           const mc = ascmc[1];
@@ -221,7 +229,6 @@ async function calc() {
             `الطالع (ASC): ${ascZ.sign} ${fmtDegMin(asc)}  |  وسط السماء (MC): ${mcZ.sign} ${fmtDegMin(mc)}`;
         }
 
-        // الكواكب في البيوت
         if (planetsInHousesOutEl) {
           for (const p of planetResults) {
             const h = houseOf(p.lon, cusps);
@@ -237,11 +244,9 @@ async function calc() {
   setStatus(`تم الحساب ✅ (JD=${jd.toFixed(6)} UTC)`);
 }
 
-/* ========= زر الحساب ========= */
 document.getElementById("btn")?.addEventListener("click", () => {
   calc().catch(e => setStatus("خطأ: " + e.message));
 });
 
-/* ========= بدء التشغيل ========= */
 init().catch(e => setStatus("خطأ init: " + e.message));
 
